@@ -48,6 +48,8 @@ struct WidgetGroupedListView: View {
         ProviderSectionHeader(
             provider: group.provider,
             plan: dataStore.plan(for: group.provider.id),
+            nameOverride: container.accountNames.name(for: dataStore.accountEmail(for: group.provider.id)),
+            accountEmail: dataStore.accountEmail(for: group.provider.id),
             warning: dataStore.headerNotice(for: group.provider.id),
             refreshing: dataStore.refreshingProviderIDs.contains(group.provider.id),
             staleness: dataStore.stalenessHint(for: group.provider.id),

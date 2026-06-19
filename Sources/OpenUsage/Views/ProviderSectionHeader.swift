@@ -12,6 +12,10 @@ import SwiftUI
 struct ProviderSectionHeader: View {
     let provider: Provider
     var plan: String?
+    /// A user-chosen account name; replaces the provider's default display name when set.
+    var nameOverride: String?
+    /// The signed-in account email, shown as a subtitle under the name (Claude multi-account).
+    var accountEmail: String?
     var warning: String?
     /// Whether this provider's refresh is currently in flight — drives the small spinner beside the name
     /// so the section shows live feedback while values are being fetched (instead of silently sitting on
@@ -35,6 +39,8 @@ struct ProviderSectionHeader: View {
     init(
         provider: Provider,
         plan: String? = nil,
+        nameOverride: String? = nil,
+        accountEmail: String? = nil,
         warning: String? = nil,
         refreshing: Bool = false,
         staleness: StalenessHint? = nil,
@@ -42,6 +48,8 @@ struct ProviderSectionHeader: View {
     ) {
         self.provider = provider
         self.plan = plan
+        self.nameOverride = nameOverride
+        self.accountEmail = accountEmail
         self.warning = warning
         self.refreshing = refreshing
         self.staleness = staleness
@@ -55,31 +63,51 @@ struct ProviderSectionHeader: View {
             ProviderIcon(source: provider.icon, inset: 0.04)
                 .frame(width: density.headerIconSize, height: density.headerIconSize)
                 .partyPulse(partyMode)
-            // Baseline-aligned pair: the plan badge (and stale tag) are smaller type and sit on the
-            // name's text baseline, so the words line up along the bottom rather than floating centered.
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                // Name + plan keep their width and stay on one line; under width pressure (a long plan
-                // name like "Super Grok Heavy") the lower-priority stale tag truncates first instead of
-                // wrapping the name to a second line.
-                Text(provider.displayName)
-                    .font(.system(size: density.headerPointSize, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                if let plan {
-                    ProviderPlanBadge(plan: plan)
-                        .layoutPriority(1)
-                }
-                // Tertiary, below the plan in hierarchy: outdated content, not something the user acts on.
-                // Short by design ("Outdated") so it never pushes the plan name onto a second line — the
-                // precise age rides in the hover tooltip. Hidden while a refresh is in flight: the spinner
-                // already says "working on it".
-                if let staleness, !refreshing {
-                    Text(staleness.label)
-                        .font(.system(size: density.planBadgePointSize))
-                        .foregroundStyle(.tertiary)
+            VStack(alignment: .leading, spacing: 1) {
+                // Baseline-aligned pair: the plan badge (and stale tag) are smaller type and sit on the
+                // name's text baseline, so the words line up along the bottom rather than floating centered.
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    // Name + plan keep their width and stay on one line; under width pressure (a long plan
+                    // name like "Super Grok Heavy") the lower-priority stale tag truncates first instead of
+                    // wrapping the name to a second line.
+                    Text(nameOverride ?? provider.displayName)
+                        .font(.system(size: density.headerPointSize, weight: .semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
-                        .hoverTooltip(staleness.tooltip)
+                        .layoutPriority(1)
+                    if let plan {
+                        ProviderPlanBadge(plan: plan)
+                            .layoutPriority(1)
+                    }
+                    // Tertiary, below the plan in hierarchy: outdated content, not something the user acts on.
+                    // Short by design ("Outdated") so it never pushes the plan name onto a second line — the
+                    // precise age rides in the hover tooltip. Hidden while a refresh is in flight: the spinner
+                    // already says "working on it".
+                    if let staleness, !refreshing {
+                        Text(staleness.label)
+                            .font(.system(size: density.planBadgePointSize))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .hoverTooltip(staleness.tooltip)
+                    }
+                    if refreshing {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .accessibilityLabel("Refreshing")
+                    } else if let warning {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.notice)
+                            .hoverTooltip(warning)
+                            .accessibilityLabel(warning)
+                    }
+                }
+                if let accountEmail, !accountEmail.isEmpty {
+                    Text(accountEmail)
+                        .font(.system(size: density.planBadgePointSize))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
             if refreshing {

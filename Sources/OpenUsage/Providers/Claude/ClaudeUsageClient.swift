@@ -80,6 +80,22 @@ struct ClaudeUsageClient: Sendable {
         )
     }
 
+    /// Fetches the signed-in account's profile, used only to resolve the account email/identity.
+    func fetchProfile(accessToken: String, config: ClaudeOAuthConfig) async throws -> HTTPResponse {
+        try await httpClient.send(
+            HTTPRequest(
+                method: "GET",
+                url: config.profileURL,
+                headers: [
+                    "Authorization": "Bearer \(accessToken.trimmingCharacters(in: .whitespacesAndNewlines))",
+                    "Accept": "application/json",
+                    "anthropic-beta": "oauth-2025-04-20",
+                    "User-Agent": "claude-code/2.1.69"
+                ],
+                timeout: 10
+            )
+        )
+    }
     func verifyAccount(
         accessToken: String,
         expectedIdentityKey: String,
@@ -114,5 +130,17 @@ struct ClaudeUsageClient: Sendable {
             throw ClaudeAuthError.sessionExpired
         }
         return nil
+    }
+}
+/// Reads the account email from the `/api/oauth/profile` response (`account.email`). Derived from the
+/// token, so it identifies the account reliably regardless of the CLI's flip-flopping `.claude.json`.
+enum ClaudeProfile {
+    static func email(fromProfileResponse data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = object["account"] as? [String: Any],
+              let email = account["email"] as? String,
+              email.contains("@")
+        else { return nil }
+        return email
     }
 }

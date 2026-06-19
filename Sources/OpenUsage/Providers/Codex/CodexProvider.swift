@@ -2,15 +2,14 @@ import Foundation
 
 @MainActor
 final class CodexProvider: ProviderRuntime {
-    let provider = Provider(
-        id: "codex",
-        displayName: "Codex",
-        icon: .providerMark("codex"),
-        links: [
-            .init(label: "Status", url: "https://status.openai.com/"),
-            .init(label: "Dashboard", url: "https://chatgpt.com/codex/settings/usage")
-        ]
-    )
+    /// Built in `init` so one instance exists per account (the id/display name vary); the links are
+    /// the same for every account.
+    let provider: Provider
+
+    static let providerLinks: [ProviderLink] = [
+        .init(label: "Status", url: "https://status.openai.com/"),
+        .init(label: "Dashboard", url: "https://chatgpt.com/codex/settings/usage")
+    ]
 
     let authStore: CodexAuthStore
     let usageClient: CodexUsageClient
@@ -20,7 +19,12 @@ final class CodexProvider: ProviderRuntime {
     let pricing: @Sendable () async -> ModelPricing
     let fallbackModel: @MainActor () -> String?
 
+    /// `instanceID` is the provider id: "codex" for the default account, "codex@<slot>" for an extra
+    /// account (whose `authStore` is pointed at its own `CODEX_HOME`). `displayName` differs per
+    /// account so the dashboard shows distinct groups.
     init(
+        instanceID: String = "codex",
+        displayName: String = "Codex",
         authStore: CodexAuthStore = CodexAuthStore(),
         usageClient: CodexUsageClient = CodexUsageClient(),
         logUsageScanner: CodexLogUsageScanner = CodexLogUsageScanner(),
@@ -29,6 +33,12 @@ final class CodexProvider: ProviderRuntime {
         pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() },
         fallbackModel: @escaping @MainActor () -> String? = { CodexFallbackModelSetting.current() }
     ) {
+        self.provider = Provider(
+            id: instanceID,
+            displayName: displayName,
+            icon: .providerMark("codex"),
+            links: Self.providerLinks
+        )
         self.authStore = authStore
         self.usageClient = usageClient
         self.logUsageScanner = logUsageScanner
@@ -40,21 +50,23 @@ final class CodexProvider: ProviderRuntime {
 
     var widgetDescriptors: [WidgetDescriptor] {
         [
-            .percent(id: "codex.session", provider: provider, title: "Session")
+            // Ids are prefixed with the instance id so every extra account owns its own metric ids
+            // (`codex@<slot>.session`); the default account keeps the bare `codex.` prefix.
+            .percent(id: "\(provider.id).session", provider: provider, title: "Session")
                 .exportingLimit("session", unit: "percent"),
-            .percent(id: "codex.weekly", provider: provider, title: "Weekly")
+            .percent(id: "\(provider.id).weekly", provider: provider, title: "Weekly")
                 .exportingLimit("weekly", unit: "percent"),
             // Model-specific Spark limits (GPT-5.3-Codex-Spark), parsed from `additional_rate_limits`.
             // Declared right after Weekly so they group with the core rate-limit meters; seeded On
             // Demand (below the caret) and unpinned in `DefaultLayout`.
-            .percent(id: "codex.spark", provider: provider, title: "Spark")
+            .percent(id: "\(provider.id).spark", provider: provider, title: "Spark")
                 .exportingLimit("spark", unit: "percent"),
-            .percent(id: "codex.sparkWeekly", provider: provider, title: "Spark Weekly")
+            .percent(id: "\(provider.id).sparkWeekly", provider: provider, title: "Spark Weekly")
                 .exportingLimit("sparkWeekly", unit: "percent"),
-            .combined(id: "codex.credits", provider: provider, title: "Extra Usage", metricLabel: "Credits")
+            .combined(id: "\(provider.id).credits", provider: provider, title: "Extra Usage", metricLabel: "Credits")
                 .exportingLimit("credits", kind: .balance, unit: "credits", source: .value(kind: .count, label: "credits"))
                 .exportingLimit("creditValue", kind: .balance, unit: "usd", source: .value(kind: .dollars)),
-            .values(id: "codex.rateLimitResets", provider: provider, title: "Rate Limit Resets", metricLabel: "Rate Limit Resets", traySuffix: "resets", showsResetExpiries: true)
+            .values(id: "\(provider.id).rateLimitResets", provider: provider, title: "Rate Limit Resets", metricLabel: "Rate Limit Resets", traySuffix: "resets", showsResetExpiries: true)
                 .exportingLimit("rateLimitResets", kind: .balance, unit: "resets", source: .value(kind: .count, label: "available")),
             .usageTrend(provider: provider)
                 .exportingHistory(
@@ -156,7 +168,9 @@ final class CodexProvider: ProviderRuntime {
             cardID: provider.id, now: now(), pricing: pricing,
             estimateCost: { CodexUsagePricing.estimatedCost(pricing: pricing, model: $0, tokens: $1) }
         )
-        async let openCode = openCodeUsageScanner.scan(now: now(), pricing: pricing)
+        async let openCode = provider.id == "codex"
+            ? openCodeUsageScanner.scan(now: now(), pricing: pricing)
+            : nil
         let (nativeScan, piScan, openCodeScan) = await (native, pi, openCode)
         var usageHistory: ProviderUsageHistory?
         // Cancellation can land between the local scans. Treat them as one unit so a
@@ -183,13 +197,17 @@ final class CodexProvider: ProviderRuntime {
         }
 
         MetricLine.appendNoDataIfNeeded(&mapped.lines)
-        return ProviderSnapshot.make(
+        var snapshot = ProviderSnapshot.make(
             provider: provider,
             plan: mapped.plan,
             lines: mapped.lines,
             refreshedAt: now(),
             usageHistory: usageHistory
         )
+        // The id_token in this account's auth carries the signed-in email — decode it (offline) so
+        // multiple Codex accounts are distinguishable and de-dupe like Claude accounts do.
+        snapshot.accountEmail = CodexAccountIdentity.email(fromIDToken: authState.auth.tokens?.idToken)
+        return snapshot
     }
 
     private static func localUsageSourceNote(hasPi: Bool, hasOpenCode: Bool) -> String {

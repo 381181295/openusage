@@ -10,10 +10,27 @@ extension LayoutStore {
     }
 
     var visiblePlaced: [PlacedWidget] {
-        placed.filter { widget in
+        let duplicates = duplicateProviderIDs
+        return placed.filter { widget in
             guard let providerID = providerID(of: widget) else { return true }
-            return isProviderEnabled(providerID)
+            return isProviderEnabled(providerID) && !duplicates.contains(providerID)
         }
+    }
+
+    /// Provider instances hidden as duplicate accounts: walking the provider order, an instance whose
+    /// resolved account email already appeared is hidden (keeping the first — the default login is
+    /// ordered ahead of a later extra account, so the extra is the one dropped). Dashboard, Customize,
+    /// Total Spend, and the menu bar all filter through `duplicateProviderIDs`, so every surface agrees.
+    /// Providers with no resolved email (single-account providers, or not yet loaded)
+    /// are never hidden.
+    var duplicateProviderIDs: Set<String> {
+        var seen = Set<String>()
+        var duplicates = Set<String>()
+        for id in orderedProviderIDs() {
+            guard let email = accountEmailLookup(id)?.lowercased(), !email.isEmpty else { continue }
+            if !seen.insert(email).inserted { duplicates.insert(id) }
+        }
+        return duplicates
     }
 
     func isMetricEnabled(_ descriptorID: String) -> Bool {
@@ -32,9 +49,15 @@ extension LayoutStore {
     /// `displayGroups`: a provider whose every metric is hidden in Customize still spends money and
     /// must still count, and look-alike dollar rows from other providers (OpenRouter's API-spend
     /// "Today") must not.
+    /// A provider hidden as a duplicate account is also excluded here: its spend is the SAME money as
+    /// the account it duplicates, so counting both would inflate Total Spend even though only one card
+    /// renders.
     var spendCapableProviders: [Provider] {
         let capableIDs = Set(registry.descriptors.filter(\.isSpendTile).map(\.providerID))
-        return orderedProviders().filter { capableIDs.contains($0.id) && isProviderEnabled($0.id) }
+        let duplicates = duplicateProviderIDs
+        return orderedProviders().filter {
+            capableIDs.contains($0.id) && isProviderEnabled($0.id) && !duplicates.contains($0.id)
+        }
     }
 
     // MARK: - Provider grouping
@@ -76,8 +99,9 @@ extension LayoutStore {
     /// Every enabled provider with *all* the metrics it supports, in its saved metric order. Enabled and
     /// disabled rows stay in-place; the switch only controls visibility.
     var customizeGroups: [ProviderMetrics] {
-        orderedProviders().compactMap { provider in
-            guard isProviderEnabled(provider.id) else { return nil }
+        let duplicates = duplicateProviderIDs
+        return orderedProviders().compactMap { provider in
+            guard isProviderEnabled(provider.id), !duplicates.contains(provider.id) else { return nil }
             let metrics = orderedSupportedMetrics(for: provider.id)
             guard !metrics.isEmpty else { return nil }
             return ProviderMetrics(
@@ -88,12 +112,12 @@ extension LayoutStore {
         }
     }
 
-    /// The L1 Customize list: every known provider in the user's saved order, regardless of enablement.
-    /// Disabled providers appear here (greyed in the UI) so the user can re-enable them or open their
-    /// detail — unlike the enabled-provider reorder list exposed by `customizeGroups`, which filters them
-    /// out. Each row carries the enablement flag and total metric count shown by the list.
+    /// The L1 Customize list: every non-duplicate provider in the user's saved order, regardless of
+    /// enablement. Disabled providers appear here (greyed in the UI) so the user can re-enable them or
+    /// open their detail. Each row carries the enablement flag and total metric count shown by the list.
     var customizeProviderRows: [ProviderRow] {
-        orderedProviders().map { provider in
+        let duplicates = duplicateProviderIDs
+        return orderedProviders().filter { !duplicates.contains($0.id) }.map { provider in
             ProviderRow(
                 provider: provider,
                 isEnabled: isProviderEnabled(provider.id),
@@ -139,8 +163,9 @@ extension LayoutStore {
     /// provider's metric order). A temporarily disabled provider is excluded from the rendered groups
     /// but keeps its pins. Drives the menu-bar strip.
     var pinnedGroups: [ProviderMetrics] {
-        orderedProviders().compactMap { provider in
-            guard isProviderEnabled(provider.id) else { return nil }
+        let duplicates = duplicateProviderIDs
+        return orderedProviders().compactMap { provider in
+            guard isProviderEnabled(provider.id), !duplicates.contains(provider.id) else { return nil }
             // Keep the strip order matching Customize: always-shown pins first, then expanded ones.
             let metrics = orderedSupportedMetrics(for: provider.id).filter { pinnedMetricIDs.contains($0.id) }
             return metrics.isEmpty ? nil : ProviderMetrics(

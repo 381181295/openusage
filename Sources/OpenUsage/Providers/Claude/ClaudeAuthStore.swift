@@ -151,6 +151,7 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
 
 struct ClaudeOAuthConfig: Hashable, Sendable {
     var usageURL: URL
+    var profileURL: URL
     var refreshURL: URL
     var clientID: String
 }
@@ -171,6 +172,7 @@ struct ClaudeAuthStore: Sendable {
     var now: @Sendable () -> Date
     let desktopOrganization: String?
     let expectedIdentityKey: String?
+    let allowsDesktopFallback: Bool
     let desktopOnly: Bool
     let preferOrganizationScopedDesktop: Bool
 
@@ -181,6 +183,7 @@ struct ClaudeAuthStore: Sendable {
         desktop: ClaudeDesktopAuthStore? = nil,
         desktopOrganization: String? = nil,
         expectedIdentityKey: String? = nil,
+        allowsDesktopFallback: Bool = true,
         desktopOnly: Bool = false,
         preferOrganizationScopedDesktop: Bool = false,
         now: @escaping @Sendable () -> Date = Date.init
@@ -191,6 +194,7 @@ struct ClaudeAuthStore: Sendable {
         self.desktop = desktop ?? ClaudeDesktopAuthStore(files: files, now: now)
         self.desktopOrganization = desktopOrganization?.lowercased()
         self.expectedIdentityKey = expectedIdentityKey?.lowercased()
+        self.allowsDesktopFallback = allowsDesktopFallback
         self.desktopOnly = desktopOnly
         self.preferOrganizationScopedDesktop = preferOrganizationScopedDesktop
         self.now = now
@@ -206,7 +210,7 @@ struct ClaudeAuthStore: Sendable {
         forceDesktopFallback: Bool = false
     ) -> ClaudeCredentialLoad {
         var stored = desktopOnly ? [] : orderedStoredCandidates()
-        var desktopStatus: ClaudeDesktopCredentialStatus = .notChecked
+        var desktopStatus: ClaudeDesktopCredentialStatus = allowsDesktopFallback ? .notChecked : .notFound
         // A working CLI login normally remains the source of truth and avoids a second Keychain prompt.
         // When several organizations have cards, though, its global Keychain token can belong to a
         // different organization than the CLI state file, so prefer the Desktop token pinned to this
@@ -214,7 +218,7 @@ struct ClaudeAuthStore: Sendable {
         let hasUsableCLILogin = stored.contains {
             $0.hasUsableAccessToken && liveUsageAvailability($0) == .available
         }
-        if forceDesktopFallback || !hasUsableCLILogin || preferOrganizationScopedDesktop {
+        if allowsDesktopFallback && (forceDesktopFallback || !hasUsableCLILogin || preferOrganizationScopedDesktop) {
             let expectedUser = expectedIdentityKey?.split(separator: "|").first.map(String.init)
             let result = desktop.load(
                 allowInteraction: allowDesktopInteraction,
@@ -390,11 +394,16 @@ struct ClaudeAuthStore: Sendable {
         guard let usageURL = URL(string: usageURLString) else {
             throw ClaudeAuthError.invalidOAuthURL(usageURLString)
         }
+        let profileURLString = "\(endpoints.baseAPI)/api/oauth/profile"
+        guard let profileURL = URL(string: profileURLString) else {
+            throw ClaudeAuthError.invalidOAuthURL(profileURLString)
+        }
         guard let refreshURL = URL(string: endpoints.refreshURL) else {
             throw ClaudeAuthError.invalidOAuthURL(endpoints.refreshURL)
         }
         return ClaudeOAuthConfig(
             usageURL: usageURL,
+            profileURL: profileURL,
             refreshURL: refreshURL,
             clientID: endpoints.clientID
         )
