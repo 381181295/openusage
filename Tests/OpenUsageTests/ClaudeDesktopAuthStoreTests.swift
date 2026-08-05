@@ -53,6 +53,12 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         )
         let httpClient = RoutingHTTPClient { request in
             XCTAssertEqual(request.headers["Authorization"], "Bearer desktop-token")
+            if request.url.absoluteString.hasSuffix("/api/oauth/profile") {
+                return HTTPResponse(
+                    statusCode: 200, headers: [:],
+                    body: Data(#"{"account":{"email":"desktop@example.com"}}"#.utf8)
+                )
+            }
             XCTAssertTrue(request.url.absoluteString.hasSuffix("/api/oauth/usage"))
             return HTTPResponse(statusCode: 200, headers: [:], body: Data(
                 #"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8
@@ -64,7 +70,8 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
 
         XCTAssertNil(badge(snapshot.lines, "Error"))
         XCTAssertNil(snapshot.warning)
-        XCTAssertEqual(httpClient.requests.count, 1)
+        XCTAssertEqual(snapshot.accountEmail, "desktop@example.com")
+        XCTAssertEqual(httpClient.requests.count, 2)
         XCTAssertEqual(fixture.keyReader.calls, [false])
     }
 
@@ -440,7 +447,9 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         }
 
         XCTAssertNil(badge(snapshot.lines, "Error"))
-        XCTAssertEqual(httpClient.requests.count, 2)
+        // 3, not upstream's 2: the two auth attempts (revoked CLI token, then the Desktop token)
+        // plus the one-shot account-email profile call multi-account adds after a successful fetch.
+        XCTAssertEqual(httpClient.requests.count, 3)
         XCTAssertTrue(httpClient.requests.last?.headers["Authorization"]?.contains("desktop-token") == true)
     }
 
