@@ -16,8 +16,6 @@ enum CodexAccountIdentity {
         return email(fromIDToken: idToken)
     }
 
-    /// Decodes the `email` claim from an OIDC `id_token` JWT payload. Best-effort: returns nil if the
-    /// token is absent, malformed, or carries no email — identity is a labelling aid, not a gate.
     static func email(fromIDToken idToken: String?) -> String? {
         guard let idToken else { return nil }
         let segments = idToken.split(separator: ".")

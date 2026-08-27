@@ -447,8 +447,6 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         }
 
         XCTAssertNil(badge(snapshot.lines, "Error"))
-        // 3, not upstream's 2: the two auth attempts (revoked CLI token, then the Desktop token)
-        // plus the one-shot account-email profile call multi-account adds after a successful fetch.
         XCTAssertEqual(httpClient.requests.count, 3)
         XCTAssertTrue(httpClient.requests.last?.headers["Authorization"]?.contains("desktop-token") == true)
     }

@@ -1,8 +1,6 @@
 import XCTest
 @testable import OpenUsage
 
-/// Layout behavior specific to extra accounts: one-time seeding (no resurrection of disabled metrics)
-/// and duplicate-account hiding driven by the injected `accountEmailLookup`.
 @MainActor
 final class MultiAccountLayoutTests: XCTestCase {
     private func makeDefaults(_ name: String) -> UserDefaults {
@@ -12,7 +10,6 @@ final class MultiAccountLayoutTests: XCTestCase {
         return defaults
     }
 
-    /// A base provider ("claude") plus one extra account ("claude@work"), each with the same two metrics.
     private func makeRegistry() -> WidgetRegistry {
         let claude = Provider(id: "claude", displayName: "Claude", icon: .providerMark("claude"))
         let work = Provider(id: "claude@work", displayName: "Claude · Work", icon: .providerMark("claude"))
@@ -31,7 +28,6 @@ final class MultiAccountLayoutTests: XCTestCase {
         )
     }
 
-    /// Pre-save a layout with the base account's two metrics placed, so seeding has something to mirror.
     private func seedBaseLayout(_ defaults: UserDefaults) {
         let placed = [PlacedWidget(descriptorID: "claude.session"), PlacedWidget(descriptorID: "claude.weekly")]
         defaults.set(try! JSONEncoder().encode(placed), forKey: "layout")
@@ -45,8 +41,6 @@ final class MultiAccountLayoutTests: XCTestCase {
         XCTAssertTrue(store.placed.contains { $0.descriptorID == "claude@work.weekly" })
     }
 
-    /// Regression: disabling every metric of an extra account must stay disabled across a relaunch — the
-    /// old auto-place re-ran for any unplaced account and resurrected them.
     func testDisablingAllAccountMetricsIsNotResurrectedOnReload() {
         let defaults = makeDefaults("NoResurrect")
         seedBaseLayout(defaults)
@@ -69,7 +63,6 @@ final class MultiAccountLayoutTests: XCTestCase {
         XCTAssertFalse(store.visiblePlaced.contains { $0.descriptorID.hasPrefix("claude@work.") })
         XCTAssertFalse(store.customizeGroups.contains { $0.provider.id == "claude@work" })
         XCTAssertFalse(store.customizeProviderRows.contains { $0.provider.id == "claude@work" })
-        // The first occurrence (the default login) stays visible.
         XCTAssertTrue(store.visiblePlaced.contains { $0.descriptorID == "claude.session" })
     }
 

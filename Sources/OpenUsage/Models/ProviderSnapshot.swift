@@ -5,8 +5,6 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
     let providerID: String
     let displayName: String
     var plan: String?
-    /// The signed-in account (email) this snapshot belongs to, for providers that support multiple
-    /// accounts. Set after construction; defaults to nil for providers/snapshots without one.
     var accountEmail: String? = nil
     var lines: [MetricLine]
     var refreshedAt: Date

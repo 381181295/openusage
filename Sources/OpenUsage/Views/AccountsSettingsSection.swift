@@ -1,9 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// The Accounts settings section: lists extra provider accounts and an in-place "Add Account" flow
-/// that logs the provider CLI into a per-account config dir. New accounts apply on the next launch
-/// (the provider list is built once at startup), so a relaunch prompt appears after a change.
 struct AccountsSettingsSection: View {
     @Environment(AppContainer.self) private var container
     @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
@@ -211,8 +208,6 @@ struct AccountsSettingsSection: View {
                 container.accounts.add(ExtraAccount(provider: provider, slot: slot, label: label, configDir: dir))
                 changedAccounts = true
                 resetForm()
-                // The provider list is built at launch, and the popover has usually closed during the
-                // browser login — relaunch so the new account loads without hunting for a prompt.
                 relaunch()
             } catch {
                 loginState = .failed(error.localizedDescription)

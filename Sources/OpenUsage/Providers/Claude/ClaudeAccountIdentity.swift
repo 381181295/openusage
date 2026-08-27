@@ -12,7 +12,6 @@ enum ClaudeAccountIdentity {
             environment: environment,
             allowsDesktopFallback: configDir == nil
         )
-        // The first stored candidate that can actually call the OAuth endpoints (keychain before file).
         guard let state = authStore.loadCredentialCandidates().first(where: {
                   $0.hasUsableAccessToken && authStore.liveUsageAvailability($0) == .available
               }),
@@ -23,9 +22,6 @@ enum ClaudeAccountIdentity {
         return await email(accessToken: token, usageClient: usageClient, config: config)
     }
 
-    /// Shared profile lookup for an already-resolved access token (also used by `ClaudeProvider`, which
-    /// holds a live token, so the request/parse/status logic lives in one place). Best-effort: returns
-    /// nil on any failure — logged at debug, since identity is a labelling aid, not a gate.
     @MainActor
     static func email(accessToken: String, usageClient: ClaudeUsageClient, config: ClaudeOAuthConfig) async -> String? {
         do {

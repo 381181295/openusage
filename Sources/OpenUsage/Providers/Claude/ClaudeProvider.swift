@@ -33,12 +33,8 @@ final class ClaudeProvider: ProviderRuntime {
     private var lastGoodUsage: ClaudeMappedUsage?
     private var rateLimitedUntil: Date?
     private static let rateLimitCooldown: TimeInterval = 5 * 60
-    /// Cached once resolved — the token's account email is stable across refreshes.
     private var resolvedAccountEmail: String?
 
-    /// `instanceID` is the provider id: "claude" for the default account, "claude@<slot>" for an
-    /// extra account (whose `authStore` is pointed at its own config dir). `displayName` differs per
-    /// account so the dashboard shows distinct groups.
     init(
         provider: Provider = ClaudeProvider.makeProvider(),
         authStore: ClaudeAuthStore = ClaudeAuthStore(),
@@ -255,9 +251,7 @@ final class ClaudeProvider: ProviderRuntime {
                 state: &state,
                 credentialGeneration: &credentialGeneration
             )
-            // Resolve (once) which account this instance is signed in as. Best-effort and off the
-            // critical path — the email only labels the card and feeds duplicate-account hiding.
-            if resolvedAccountEmail == nil, let token = state.oauth.accessToken, !token.isEmpty,
+            if resolvedAccountEmail == nil, authStore.expectedIdentityKey == nil, let token = state.oauth.accessToken, !token.isEmpty,
                let config = try? authStore.oauthConfig() {
                 resolvedAccountEmail = await ClaudeAccountIdentity.email(
                     accessToken: token, usageClient: usageClient, config: config

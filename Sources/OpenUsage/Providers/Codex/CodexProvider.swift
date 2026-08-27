@@ -2,8 +2,6 @@ import Foundation
 
 @MainActor
 final class CodexProvider: ProviderRuntime {
-    /// Built in `init` so one instance exists per account (the id/display name vary); the links are
-    /// the same for every account.
     let provider: Provider
 
     static let providerLinks: [ProviderLink] = [
@@ -19,9 +17,6 @@ final class CodexProvider: ProviderRuntime {
     let pricing: @Sendable () async -> ModelPricing
     let fallbackModel: @MainActor () -> String?
 
-    /// `instanceID` is the provider id: "codex" for the default account, "codex@<slot>" for an extra
-    /// account (whose `authStore` is pointed at its own `CODEX_HOME`). `displayName` differs per
-    /// account so the dashboard shows distinct groups.
     init(
         instanceID: String = "codex",
         displayName: String = "Codex",
@@ -50,8 +45,6 @@ final class CodexProvider: ProviderRuntime {
 
     var widgetDescriptors: [WidgetDescriptor] {
         [
-            // Ids are prefixed with the instance id so every extra account owns its own metric ids
-            // (`codex@<slot>.session`); the default account keeps the bare `codex.` prefix.
             .percent(id: "\(provider.id).session", provider: provider, title: "Session")
                 .exportingLimit("session", unit: "percent"),
             .percent(id: "\(provider.id).weekly", provider: provider, title: "Weekly")

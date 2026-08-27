@@ -1,9 +1,6 @@
 import Foundation
 import Observation
 
-/// Persisted list of extra provider accounts (beyond the default CLI login). The provider list is
-/// built from this at launch, so changes take effect on the next app start (matching how adding a
-/// CLI account works). The Accounts settings tab drives it.
 @MainActor
 @Observable
 final class AccountsStore {

@@ -27,8 +27,6 @@ enum AccountProviders {
                         environment: environment,
                         allowsDesktopFallback: false
                     ),
-                    // No `cacheIdentityOverride`: the scanner derives its parse-cache identity from the
-                    // roots this environment resolves, which already differ per account config dir.
                     logUsageScanner: ClaudeLogUsageScanner(environment: environment)
                 )
             case "codex":

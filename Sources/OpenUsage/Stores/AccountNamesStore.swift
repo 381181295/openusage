@@ -17,13 +17,11 @@ final class AccountNamesStore {
         self.names = (defaults.dictionary(forKey: Self.storageKey) as? [String: String]) ?? [:]
     }
 
-    /// The custom name for an email, or nil if none is set.
     func name(for email: String?) -> String? {
         guard let email, let name = names[email.lowercased()], !name.isEmpty else { return nil }
         return name
     }
 
-    /// Set (or clear, when blank) the custom name for an email.
     func setName(_ name: String, for email: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = email.lowercased()

@@ -12,9 +12,7 @@ import SwiftUI
 struct ProviderSectionHeader: View {
     let provider: Provider
     var plan: String?
-    /// A user-chosen account name; replaces the provider's default display name when set.
     var nameOverride: String?
-    /// The signed-in account email, shown as a subtitle under the name (Claude multi-account).
     var accountEmail: String?
     var warning: String?
     /// Whether this provider's refresh is currently in flight — drives the small spinner beside the name

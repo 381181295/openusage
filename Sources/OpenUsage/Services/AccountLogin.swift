@@ -22,7 +22,7 @@ enum AccountLoginError: Error, LocalizedError {
 
 /// Logs a provider CLI into a specific config dir so an additional account's credentials land there
 /// (read back later via `CLAUDE_CONFIG_DIR` / `CODEX_HOME`). The CLI itself drives the browser OAuth
-/// flow and exits when it completes. Ported from the Tauri edition's `account_login.rs`.
+/// flow and exits when it completes.
 enum AccountLogin {
     static func spec(for provider: String) -> AccountLoginSpec? {
         switch provider {
@@ -66,8 +66,6 @@ enum AccountLogin {
             throw AccountLoginError.loginFailed(lastLine ?? "")
         }
     }
-
-    // MARK: - CLI resolution
 
     /// Finds the provider CLI. GUI apps get a minimal PATH on macOS, so common install locations and
     /// the login shell are also consulted.

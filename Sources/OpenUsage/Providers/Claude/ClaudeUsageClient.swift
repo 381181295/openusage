@@ -80,7 +80,6 @@ struct ClaudeUsageClient: Sendable {
         )
     }
 
-    /// Fetches the signed-in account's profile, used only to resolve the account email/identity.
     func fetchProfile(accessToken: String, config: ClaudeOAuthConfig) async throws -> HTTPResponse {
         try await httpClient.send(
             HTTPRequest(

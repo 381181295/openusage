@@ -2,8 +2,6 @@ import XCTest
 @testable import OpenUsage
 
 final class CodexAccountIdentityTests: XCTestCase {
-    /// Builds a JWT-shaped `header.payload.signature` string with the given payload JSON, base64url
-    /// encoded with padding stripped — exactly how real OIDC id_tokens are shaped.
     private func makeIDToken(payload: String) -> String {
         func base64url(_ string: String) -> String {
             Data(string.utf8).base64EncodedString()
