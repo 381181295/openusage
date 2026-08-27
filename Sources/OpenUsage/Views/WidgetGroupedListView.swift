@@ -45,11 +45,13 @@ struct WidgetGroupedListView: View {
     }
 
     private func header(_ group: ProviderGroup) -> some View {
-        ProviderSectionHeader(
+        let accountEmail = dataStore.accountEmail(for: group.provider.id)
+        return ProviderSectionHeader(
             provider: group.provider,
             plan: dataStore.plan(for: group.provider.id),
-            nameOverride: container.accountNames.name(for: dataStore.accountEmail(for: group.provider.id)),
-            accountEmail: dataStore.accountEmail(for: group.provider.id),
+            nameOverride: container.accountNames.name(for: accountEmail),
+            accountEmail: accountEmail,
+            onRenameAccount: renameAction(for: accountEmail),
             warning: dataStore.headerNotice(for: group.provider.id),
             refreshing: dataStore.refreshingProviderIDs.contains(group.provider.id),
             staleness: dataStore.stalenessHint(for: group.provider.id),
@@ -118,6 +120,13 @@ struct WidgetGroupedListView: View {
             case .links:
                 "provider-links"
             }
+        }
+    }
+
+    private func renameAction(for accountEmail: String?) -> ((String) -> Void)? {
+        guard let accountEmail else { return nil }
+        return { name in
+            container.accountNames.setName(name, for: accountEmail)
         }
     }
 

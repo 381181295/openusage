@@ -14,6 +14,7 @@ struct ProviderSectionHeader: View {
     var plan: String?
     var nameOverride: String?
     var accountEmail: String?
+    var onRenameAccount: ((String) -> Void)?
     var warning: String?
     /// Whether this provider's refresh is currently in flight — drives the small spinner beside the name
     /// so the section shows live feedback while values are being fetched (instead of silently sitting on
@@ -33,12 +34,16 @@ struct ProviderSectionHeader: View {
     /// Party easter egg: pulse the provider mark. Off by default everywhere else.
     @Environment(\.popoverPartyMode) private var partyMode
     @State private var isHovered = false
+    @State private var isRenaming = false
+    @State private var renameDraft = ""
+    @FocusState private var isRenameFocused: Bool
 
     init(
         provider: Provider,
         plan: String? = nil,
         nameOverride: String? = nil,
         accountEmail: String? = nil,
+        onRenameAccount: ((String) -> Void)? = nil,
         warning: String? = nil,
         refreshing: Bool = false,
         staleness: StalenessHint? = nil,
@@ -48,6 +53,7 @@ struct ProviderSectionHeader: View {
         self.plan = plan
         self.nameOverride = nameOverride
         self.accountEmail = accountEmail
+        self.onRenameAccount = onRenameAccount
         self.warning = warning
         self.refreshing = refreshing
         self.staleness = staleness
@@ -68,11 +74,60 @@ struct ProviderSectionHeader: View {
                     // Name + plan keep their width and stay on one line; under width pressure (a long plan
                     // name like "Super Grok Heavy") the lower-priority stale tag truncates first instead of
                     // wrapping the name to a second line.
-                    Text(nameOverride ?? provider.displayName)
-                        .font(.system(size: density.headerPointSize, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .layoutPriority(1)
+                    HStack(spacing: 2) {
+                        Text(nameOverride ?? provider.displayName)
+                            .font(.system(size: density.headerPointSize, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        if onRenameAccount != nil {
+                            Button {
+                                renameDraft = nameOverride ?? ""
+                                isRenaming = true
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 24, height: 24)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Rename Account")
+                            .accessibilityLabel("Rename \(nameOverride ?? provider.displayName)")
+                            .popover(isPresented: $isRenaming, arrowEdge: .bottom) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Rename account")
+                                        .font(.headline)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Account name")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        TextField(provider.displayName, text: $renameDraft)
+                                            .textFieldStyle(.roundedBorder)
+                                            .focused($isRenameFocused)
+                                            .onSubmit(saveRename)
+                                    }
+                                    HStack {
+                                        Spacer()
+                                        Button("Cancel") {
+                                            isRenaming = false
+                                        }
+                                        .keyboardShortcut(.cancelAction)
+                                        Button("Save") {
+                                            saveRename()
+                                        }
+                                        .keyboardShortcut(.defaultAction)
+                                    }
+                                }
+                                .padding(12)
+                                .frame(width: 240)
+                                .onAppear {
+                                    isRenameFocused = true
+                                }
+                            }
+                        }
+                    }
+                    .layoutPriority(1)
                     if let plan {
                         ProviderPlanBadge(plan: plan)
                             .layoutPriority(1)
@@ -87,17 +142,6 @@ struct ProviderSectionHeader: View {
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .hoverTooltip(staleness.tooltip)
-                    }
-                    if refreshing {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .accessibilityLabel("Refreshing")
-                    } else if let warning {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Theme.notice)
-                            .hoverTooltip(warning)
-                            .accessibilityLabel(warning)
                     }
                 }
                 if let accountEmail, !accountEmail.isEmpty {
@@ -132,6 +176,11 @@ struct ProviderSectionHeader: View {
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
+    }
+
+    private func saveRename() {
+        onRenameAccount?(renameDraft)
+        isRenaming = false
     }
 }
 
