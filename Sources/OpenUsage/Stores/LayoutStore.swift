@@ -203,17 +203,6 @@ final class LayoutStore {
         return descriptorID.hasPrefix(prefix) ? String(descriptorID.dropFirst(prefix.count)) : descriptorID
     }
 
-    private func sameTypeDescriptorIDs(matching descriptorID: String) -> [String] {
-        guard let providerID = registry.descriptor(id: descriptorID)?.providerID else { return [descriptorID] }
-        let baseType = Self.baseProviderType(providerID)
-        let suffix = Self.metricSuffix(descriptorID, providerID: providerID)
-        return registry.providers
-            .map(\.id)
-            .filter { Self.baseProviderType($0) == baseType }
-            .map { "\($0).\(suffix)" }
-            .filter { registry.descriptor(id: $0) != nil }
-    }
-
     func isProviderExpanded(_ providerID: String) -> Bool {
         expandedProviderIDs.contains(providerID)
     }
@@ -235,17 +224,15 @@ final class LayoutStore {
 
     func setMetricEnabled(_ descriptorID: String, _ enabled: Bool) {
         recordingUndoStep {
-            for id in sameTypeDescriptorIDs(matching: descriptorID) {
-                if enabled {
-                    if defaultExpandedOnEnableIDs.remove(id) != nil {
-                        expandedMetricIDs.insert(id)
-                        persistExpanded()
-                        persistExpandOnEnable()
-                    }
-                    add(id)
-                } else if let widget = placed.first(where: { $0.descriptorID == id }) {
-                    remove(widget.id)
+            if enabled {
+                if defaultExpandedOnEnableIDs.remove(descriptorID) != nil {
+                    expandedMetricIDs.insert(descriptorID)
+                    persistExpanded()
+                    persistExpandOnEnable()
                 }
+                add(descriptorID)
+            } else if let widget = placed.first(where: { $0.descriptorID == descriptorID }) {
+                remove(widget.id)
             }
         }
     }

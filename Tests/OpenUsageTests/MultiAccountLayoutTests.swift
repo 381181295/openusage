@@ -54,6 +54,20 @@ final class MultiAccountLayoutTests: XCTestCase {
         XCTAssertFalse(reloaded.placed.contains { $0.descriptorID.hasPrefix("claude@work.") })
     }
 
+    func testEnablingMetricOnlyChangesSelectedAccount() {
+        let defaults = makeDefaults("IndependentToggle")
+        seedBaseLayout(defaults)
+        let store = LayoutStore(registry: makeRegistry(), defaults: defaults, storageKey: "layout")
+        for widget in store.placed where widget.descriptorID.hasSuffix(".session") {
+            store.remove(widget.id)
+        }
+
+        store.setMetricEnabled("claude@work.session", true)
+
+        XCTAssertTrue(store.isMetricEnabled("claude@work.session"))
+        XCTAssertFalse(store.isMetricEnabled("claude.session"))
+    }
+
     func testDuplicateEmailAccountHiddenFromDashboardAndCustomize() {
         let defaults = makeDefaults("Dedup")
         seedBaseLayout(defaults)
