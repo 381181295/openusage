@@ -14,6 +14,8 @@ set -euo pipefail
 # Usage: script/build_and_run.sh [run|build|logs|verify]
 # Env:   CODESIGN_IDENTITY  override signing identity (exact name or hash)
 #        CONFIG             "release" (default) or "debug"
+#        OPENUSAGE_VERSION  override version from the nearest reachable v-prefixed git tag
+#        OPENUSAGE_BUILD    override build number (default: git commit count)
 #        ICLOUD_PROVISIONING_PROFILE  optional override for the development provisioning profile;
 #                         otherwise the newest matching installed profile is selected automatically
 
@@ -25,10 +27,11 @@ APP_DISPLAY="OpenUsage"                 # user-facing app name
 BUNDLE_ID="${BUNDLE_ID:-com.robinebers.openusage.dev}"
 ICLOUD_CONTAINER_ID="iCloud.com.robinebers.openusage.dev"
 MIN_SYSTEM_VERSION="15.0"
-APP_VERSION="0.7.0"
-APP_BUILD="0.7.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_VERSION="${OPENUSAGE_VERSION:-$(git -C "$ROOT_DIR" describe --tags --abbrev=0 --match 'v*')}"
+APP_VERSION="${APP_VERSION#v}"
+APP_BUILD="${OPENUSAGE_BUILD:-$(git -C "$ROOT_DIR" rev-list --count HEAD)}"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_DISPLAY.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
