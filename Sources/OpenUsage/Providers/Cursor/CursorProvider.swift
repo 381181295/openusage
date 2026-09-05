@@ -59,13 +59,32 @@ final class CursorProvider: ProviderRuntime {
     }
 
     func hasLocalCredentials() async -> Bool {
-        // Same source as `refresh()`: any auth state (state DB or keychain) counts.
-        await loadOffMainActor { [authStore] in authStore.loadAuthState() } != nil
+        let load = await loadOffMainActor { [authStore] in
+            authStore.loadAuthState(allowInteraction: false)
+        }
+        switch load {
+        case .available, .grokBotPermissionRequired:
+            return true
+        case .notFound, .grokBotInvalid:
+            return false
+        }
     }
 
     func refresh() async -> ProviderSnapshot {
-        guard let state = await loadOffMainActor({ [authStore] in authStore.loadAuthState() }) else {
+        let allowInteraction = ProviderRefreshContext.isManual
+        let load = await loadOffMainActor { [authStore] in
+            authStore.loadAuthState(allowInteraction: allowInteraction)
+        }
+        let state: CursorAuthState
+        switch load {
+        case .available(let available):
+            state = available
+        case .notFound:
             return ProviderSnapshot.error(provider: provider, error: CursorAuthError.notLoggedIn)
+        case .grokBotPermissionRequired:
+            return ProviderSnapshot.error(provider: provider, error: CursorAuthError.grokBotPermissionRequired)
+        case .grokBotInvalid:
+            return ProviderSnapshot.error(provider: provider, error: CursorAuthError.grokBotCredentialsUnavailable)
         }
 
         do {
@@ -76,39 +95,62 @@ final class CursorProvider: ProviderRuntime {
     }
 
     private func probe(authState initialState: CursorAuthState) async throws -> ProviderSnapshot {
-        var authState = initialState
-        var accessToken = authState.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let usageResponse: HTTPResponse
+        let currentToken: String
 
-        if authStore.needsRefresh(accessToken) {
-            do {
-                if let refreshed = try await refreshAccessToken(authState: authState) {
-                    authState.accessToken = refreshed
-                    accessToken = refreshed
-                } else if accessToken == nil {
-                    throw CursorAuthError.notLoggedIn
-                }
-            } catch {
-                if accessToken == nil {
-                    throw error
+        switch initialState {
+        case .owned(var authState):
+            var accessToken = authState.accessToken?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+
+            if authStore.needsRefresh(authState) {
+                do {
+                    if let refreshed = try await refreshOwnedAccessToken(authState: authState) {
+                        authState.accessToken = refreshed
+                        accessToken = refreshed
+                    } else if accessToken == nil {
+                        throw CursorAuthError.notLoggedIn
+                    }
+                } catch {
+                    if accessToken == nil {
+                        throw error
+                    }
                 }
             }
+
+            guard let accessToken else {
+                throw CursorAuthError.notLoggedIn
+            }
+
+            usageResponse = try await fetchUsageWithRetry(
+                accessToken: accessToken,
+                authState: &authState
+            )
+            try ProviderAuthRetry.requireSuccess(
+                usageResponse,
+                authExpired: CursorAuthError.tokenExpired,
+                requestFailed: { CursorUsageError.requestFailed($0) }
+            )
+            currentToken = authState.accessToken ?? accessToken
+
+        case .borrowed(let authState):
+            currentToken = authState.accessToken
+            do {
+                usageResponse = try await usageClient.fetchUsage(accessToken: currentToken)
+            } catch {
+                throw CursorUsageError.connectionFailed
+            }
+            try ProviderAuthRetry.requireSuccess(
+                usageResponse,
+                authExpired: CursorAuthError.grokBotAuthenticationRequired,
+                requestFailed: { CursorUsageError.requestFailed($0) }
+            )
         }
 
-        guard let accessToken else {
-            throw CursorAuthError.notLoggedIn
-        }
-
-        let usageResponse = try await fetchUsageWithRetry(accessToken: accessToken, authState: &authState)
-        try ProviderAuthRetry.requireSuccess(
-            usageResponse,
-            authExpired: CursorAuthError.tokenExpired,
-            requestFailed: { CursorUsageError.requestFailed($0) }
-        )
         guard let usage = ProviderParse.jsonObject(usageResponse.body) else {
             throw CursorUsageError.invalidResponse
         }
-        // The access token may have rotated during the usage fetch's refresh-and-retry; read the live one.
-        let currentToken = authState.accessToken ?? accessToken
 
         let (planName, planInfoUnavailable) = await fetchPlanName(accessToken: currentToken)
         let fallback = CursorUsageMapper.shouldUseRequestBasedFallback(
@@ -229,14 +271,17 @@ final class CursorProvider: ProviderRuntime {
         return nil
     }
 
-    private func fetchUsageWithRetry(accessToken: String, authState: inout CursorAuthState) async throws -> HTTPResponse {
+    private func fetchUsageWithRetry(
+        accessToken: String,
+        authState: inout CursorOwnedAuthState
+    ) async throws -> HTTPResponse {
         var working = authState
         defer { authState = working }
         return try await ProviderAuthRetry.fetch(
             token: accessToken,
             attempt: { try await self.usageClient.fetchUsage(accessToken: $0) },
             refreshAccessToken: {
-                guard let refreshed = try await self.refreshAccessToken(authState: working) else {
+                guard let refreshed = try await self.refreshOwnedAccessToken(authState: working) else {
                     throw CursorAuthError.tokenExpired
                 }
                 working.accessToken = refreshed
@@ -248,7 +293,7 @@ final class CursorProvider: ProviderRuntime {
         )
     }
 
-    private func refreshAccessToken(authState: CursorAuthState) async throws -> String? {
+    private func refreshOwnedAccessToken(authState: CursorOwnedAuthState) async throws -> String? {
         guard let refreshToken = authState.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
             return nil
         }

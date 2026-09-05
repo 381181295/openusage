@@ -1,20 +1,39 @@
 import Foundation
 
-struct CursorAuthState: Hashable, Sendable {
-    enum Source: Hashable, Sendable {
-        case sqlite
-        case keychain
-    }
+enum CursorOwnedAuthSource: Hashable, Sendable {
+    case sqlite
+    case keychain
+}
 
+struct CursorOwnedAuthState: Hashable, Sendable {
     var accessToken: String?
     var refreshToken: String?
-    var source: Source
+    var source: CursorOwnedAuthSource
+}
+
+struct CursorBorrowedAuthState: Hashable, Sendable {
+    let accessToken: String
+}
+
+enum CursorAuthState: Hashable, Sendable {
+    case owned(CursorOwnedAuthState)
+    case borrowed(CursorBorrowedAuthState)
+}
+
+enum CursorAuthLoad: Hashable, Sendable {
+    case available(CursorAuthState)
+    case notFound
+    case grokBotPermissionRequired
+    case grokBotInvalid
 }
 
 enum CursorAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
     case sessionExpired
     case tokenExpired
+    case grokBotPermissionRequired
+    case grokBotCredentialsUnavailable
+    case grokBotAuthenticationRequired
 
     var errorDescription: String? {
         switch self {
@@ -24,6 +43,12 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
             return "Session expired. Sign in via Cursor app or run `agent login`."
         case .tokenExpired:
             return "Token expired. Sign in via Cursor app or run `agent login`."
+        case .grokBotPermissionRequired:
+            return "Grok Bot Cursor login found. Refresh manually and choose Always Allow to connect it."
+        case .grokBotCredentialsUnavailable:
+            return "Grok Bot Cursor login couldn't be read. Open Grok Bot, then refresh OpenUsage."
+        case .grokBotAuthenticationRequired:
+            return "Grok Bot's Cursor login was rejected. Open Grok Bot, then refresh OpenUsage."
         }
     }
 }
@@ -39,19 +64,39 @@ struct CursorAuthStore: Sendable {
 
     var sqlite: SQLiteAccessing
     var keychain: KeychainAccessing
+    var grokBot: GrokBotCursorAuthStore
     var now: @Sendable () -> Date
 
     init(
         sqlite: SQLiteAccessing = SQLiteCLIAccessor(),
         keychain: KeychainAccessing = SecurityKeychainAccessor(),
+        grokBot: GrokBotCursorAuthStore = GrokBotCursorAuthStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.sqlite = sqlite
         self.keychain = keychain
+        self.grokBot = grokBot
         self.now = now
     }
 
-    func loadAuthState() -> CursorAuthState? {
+    func loadAuthState(allowInteraction: Bool) -> CursorAuthLoad {
+        if let owned = loadOwnedAuthState() {
+            return .available(.owned(owned))
+        }
+
+        switch grokBot.load(allowInteraction: allowInteraction) {
+        case .available(let borrowed):
+            return .available(.borrowed(borrowed))
+        case .notFound:
+            return .notFound
+        case .permissionRequired:
+            return .grokBotPermissionRequired
+        case .invalid:
+            return .grokBotInvalid
+        }
+    }
+
+    private func loadOwnedAuthState() -> CursorOwnedAuthState? {
         let sqliteAccessToken = readStateValue(Self.accessTokenKey)
         let sqliteRefreshToken = readStateValue(Self.refreshTokenKey)
         let sqliteMembershipType = readStateValue(Self.membershipTypeKey)?
@@ -69,14 +114,14 @@ struct CursorAuthStore: Sendable {
             let keychainSubject = Self.tokenSubject(keychainAccessToken)
             let subjectsDiffer = sqliteSubject != nil && keychainSubject != nil && sqliteSubject != keychainSubject
             if hasKeychainAuth, sqliteMembershipType == "free", subjectsDiffer {
-                return CursorAuthState(
+                return CursorOwnedAuthState(
                     accessToken: keychainAccessToken,
                     refreshToken: keychainRefreshToken,
                     source: .keychain
                 )
             }
 
-            return CursorAuthState(
+            return CursorOwnedAuthState(
                 accessToken: sqliteAccessToken,
                 refreshToken: sqliteRefreshToken,
                 source: .sqlite
@@ -84,7 +129,7 @@ struct CursorAuthStore: Sendable {
         }
 
         if hasKeychainAuth {
-            return CursorAuthState(
+            return CursorOwnedAuthState(
                 accessToken: keychainAccessToken,
                 refreshToken: keychainRefreshToken,
                 source: .keychain
@@ -94,8 +139,8 @@ struct CursorAuthStore: Sendable {
         return nil
     }
 
-    func needsRefresh(_ accessToken: String?) -> Bool {
-        guard let accessToken,
+    func needsRefresh(_ authState: CursorOwnedAuthState) -> Bool {
+        guard let accessToken = authState.accessToken,
               let expiresAt = Self.tokenExpiration(accessToken)
         else {
             return true
@@ -103,7 +148,7 @@ struct CursorAuthStore: Sendable {
         return expiresAt.timeIntervalSince(now()) <= Self.refreshBufferSeconds
     }
 
-    func saveAccessToken(_ accessToken: String, source: CursorAuthState.Source) throws {
+    func saveAccessToken(_ accessToken: String, source: CursorOwnedAuthSource) throws {
         switch source {
         case .sqlite:
             try writeStateValue(Self.accessTokenKey, accessToken)

@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class CursorOptionalEndpointTests: XCTestCase {
     func testOptionalSchemaAndHTTPFailuresAreLoggedWithoutDiscardingPrimaryUsage() async throws {
-        let accessToken = makeCursorJWT()
+        let accessToken = makeUnsignedCursorJWT()
         let provider = makeProvider(accessToken: accessToken) { request in
             switch request.url {
             case CursorUsageClient.usageURL:
@@ -31,7 +31,7 @@ final class CursorOptionalEndpointTests: XCTestCase {
     }
 
     func testOptionalTransportAndSessionPreparationFailuresAreLogged() async throws {
-        let provider = makeProvider(accessToken: makeCursorJWT(sub: nil)) { request in
+        let provider = makeProvider(accessToken: makeUnsignedCursorJWT(sub: nil)) { request in
             switch request.url {
             case CursorUsageClient.usageURL:
                 return Self.primaryUsageResponse
@@ -246,7 +246,7 @@ final class CursorOptionalEndpointTests: XCTestCase {
     }
 
     private func makeProvider(
-        accessToken: String = makeCursorJWT(),
+        accessToken: String = makeUnsignedCursorJWT(),
         handler: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse
     ) -> CursorProvider {
         CursorProvider(
@@ -291,5 +291,3 @@ final class CursorOptionalEndpointTests: XCTestCase {
         return (used, limit)
     }
 }
-
-// makeCursorJWT and KeyValueSQLite live in TestSupport.swift.

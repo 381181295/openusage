@@ -1,3 +1,4 @@
+import CommonCrypto
 import XCTest
 @testable import OpenUsage
 
@@ -322,6 +323,69 @@ final class ServiceKeychain: KeychainAccessing, @unchecked Sendable {
     }
 }
 
+func encryptElectronSafeStorageV10(_ plaintext: Data, key: Data) throws -> Data {
+    let iv = Data(repeating: 0x20, count: kCCBlockSizeAES128)
+    var output = Data(count: plaintext.count + kCCBlockSizeAES128)
+    var outputLength = 0
+    let capacity = output.count
+    let status = output.withUnsafeMutableBytes { outputBytes in
+        plaintext.withUnsafeBytes { plaintextBytes in
+            key.withUnsafeBytes { keyBytes in
+                iv.withUnsafeBytes { ivBytes in
+                    CCCrypt(
+                        CCOperation(kCCEncrypt),
+                        CCAlgorithm(kCCAlgorithmAES),
+                        CCOptions(kCCOptionPKCS7Padding),
+                        keyBytes.baseAddress,
+                        key.count,
+                        ivBytes.baseAddress,
+                        plaintextBytes.baseAddress,
+                        plaintext.count,
+                        outputBytes.baseAddress,
+                        capacity,
+                        &outputLength
+                    )
+                }
+            }
+        }
+    }
+    guard status == kCCSuccess else {
+        throw ElectronSafeStorageError.decryptionFailed(status)
+    }
+    output.count = outputLength
+    return Data("v10".utf8) + output
+}
+
+final class FakeElectronSafeStoragePasswordReader: ElectronSafeStoragePasswordReading, @unchecked Sendable {
+    let password: String?
+    let requiresInteraction: Bool
+    private let lock = NSLock()
+    private var recordedCalls: [Bool] = []
+    private var recordedItems: [ElectronSafeStorageKeychainItem] = []
+
+    var calls: [Bool] { lock.withLock { recordedCalls } }
+    var items: [ElectronSafeStorageKeychainItem] { lock.withLock { recordedItems } }
+
+    init(password: String?, requiresInteraction: Bool = false) {
+        self.password = password
+        self.requiresInteraction = requiresInteraction
+    }
+
+    func readPassword(
+        for item: ElectronSafeStorageKeychainItem,
+        allowInteraction: Bool
+    ) throws -> String? {
+        lock.withLock {
+            recordedCalls.append(allowInteraction)
+            recordedItems.append(item)
+        }
+        if requiresInteraction, !allowInteraction {
+            throw ElectronSafeStorageError.permissionRequired
+        }
+        return password
+    }
+}
+
 final class FakeHTTPClient: HTTPClient, @unchecked Sendable {
     var response: HTTPResponse
     var requests: [HTTPRequest] = []
@@ -428,11 +492,14 @@ final class SequenceProviderRuntime: ProviderRuntime {
     }
 }
 
-/// An unsigned Cursor-style JWT whose payload carries the `sub`/`exp` claims the auth store parses.
-/// Pass `sub: nil` for a token without a subject claim.
-func makeCursorJWT(sub: String? = "google-oauth2|user", exp: Double = 9_999_999_999) -> String {
-    let payload = sub.map { #"{"sub":"\#($0)","exp":\#(exp)}"# } ?? #"{"exp":\#(exp)}"#
-    let encoded = Data(payload.utf8).base64EncodedString()
+func makeUnsignedCursorJWT(
+    sub: String? = "google-oauth2|user",
+    exp: Double? = 9_999_999_999
+) -> String {
+    var payload: [String: Any] = [:]
+    if let sub { payload["sub"] = sub }
+    if let exp { payload["exp"] = exp }
+    let encoded = try! JSONSerialization.data(withJSONObject: payload).base64EncodedString()
         .replacingOccurrences(of: "=", with: "")
         .replacingOccurrences(of: "+", with: "-")
         .replacingOccurrences(of: "/", with: "_")

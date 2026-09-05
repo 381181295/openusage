@@ -1,4 +1,3 @@
-import CommonCrypto
 import CryptoKit
 import Foundation
 import XCTest
@@ -51,30 +50,36 @@ extension ClaudeDesktopAuthStoreTests {
         requiresInteraction: Bool = false,
         accountUUID: String? = nil
     ) throws -> DesktopFixture {
-        let key = try ClaudeDesktopAuthStore.deriveKey(password: password)
+        let key = try ElectronSafeStorage.deriveKey(password: password)
         let cookieHost = ".claude.ai"
         let cookiePlaintext = Data(SHA256.hash(data: Data(cookieHost.utf8))) + Data(activeOrganization.utf8)
-        let encryptedCookie = try encrypt(cookiePlaintext, key: key)
+        let encryptedCookie = try encryptElectronSafeStorageV10(cookiePlaintext, key: key)
         let v2Data = try JSONSerialization.data(withJSONObject: v2)
-        let encryptedV2 = try encrypt(v2Data, key: key)
+        let encryptedV2 = try encryptElectronSafeStorageV10(v2Data, key: key)
         var config: [String: Any] = ["oauth:tokenCacheV2": encryptedV2.base64EncodedString()]
         if let accountUUID { config["lastKnownAccountUuid"] = accountUUID }
         if let v1 {
             let v1Data = try JSONSerialization.data(withJSONObject: v1)
-            config["oauth:tokenCache"] = try encrypt(v1Data, key: key).base64EncodedString()
+            config["oauth:tokenCache"] = try encryptElectronSafeStorageV10(v1Data, key: key).base64EncodedString()
         }
         let configText = String(decoding: try JSONSerialization.data(withJSONObject: config), as: UTF8.self)
         let configPath = home.appendingPathComponent("Library/Application Support/Claude/config.json").path
         let cookiesPath = home.appendingPathComponent("Library/Application Support/Claude/Cookies").path
         let files = FakeFiles([configPath: configText, cookiesPath: "sqlite-fixture"])
         let sqlite = FakeClaudeDesktopSQLite(value: "encrypted:\(hex(encryptedCookie))")
-        let keyReader = FakeClaudeDesktopKeyReader(password: password, requiresInteraction: requiresInteraction)
+        let keyReader = FakeElectronSafeStoragePasswordReader(
+            password: password,
+            requiresInteraction: requiresInteraction
+        )
         let fixtureHome = home
         let fixtureNow = now
         let store = ClaudeDesktopAuthStore(
             files: files,
             sqlite: sqlite,
-            keyReader: keyReader,
+            safeStorage: ElectronSafeStorage(
+                item: ClaudeDesktopAuthStore.safeStorageItem,
+                passwordReader: keyReader
+            ),
             homeDirectory: { fixtureHome },
             now: { fixtureNow }
         )
@@ -102,39 +107,6 @@ extension ClaudeDesktopAuthStoreTests {
         ]
     }
 
-    func encrypt(_ plaintext: Data, key: Data) throws -> Data {
-        let iv = Data(repeating: 0x20, count: kCCBlockSizeAES128)
-        var output = Data(count: plaintext.count + kCCBlockSizeAES128)
-        var outputLength = 0
-        let capacity = output.count
-        let status = output.withUnsafeMutableBytes { outputBytes in
-            plaintext.withUnsafeBytes { plaintextBytes in
-                key.withUnsafeBytes { keyBytes in
-                    iv.withUnsafeBytes { ivBytes in
-                        CCCrypt(
-                            CCOperation(kCCEncrypt),
-                            CCAlgorithm(kCCAlgorithmAES),
-                            CCOptions(kCCOptionPKCS7Padding),
-                            keyBytes.baseAddress,
-                            key.count,
-                            ivBytes.baseAddress,
-                            plaintextBytes.baseAddress,
-                            plaintext.count,
-                            outputBytes.baseAddress,
-                            capacity,
-                            &outputLength
-                        )
-                    }
-                }
-            }
-        }
-        guard status == kCCSuccess else {
-            throw ClaudeDesktopCredentialError.decryptionFailed(status)
-        }
-        output.count = outputLength
-        return Data("v10".utf8) + output
-    }
-
     func hex(_ data: Data) -> String {
         data.map { String(format: "%02X", $0) }.joined()
     }
@@ -150,26 +122,7 @@ extension ClaudeDesktopAuthStoreTests {
 struct DesktopFixture {
     var store: ClaudeDesktopAuthStore
     var files: FakeFiles
-    var keyReader: FakeClaudeDesktopKeyReader
-}
-
-final class FakeClaudeDesktopKeyReader: ClaudeDesktopSafeStorageKeyReading, @unchecked Sendable {
-    let password: String
-    let requiresInteraction: Bool
-    var calls: [Bool] = []
-
-    init(password: String, requiresInteraction: Bool) {
-        self.password = password
-        self.requiresInteraction = requiresInteraction
-    }
-
-    func readPassword(allowInteraction: Bool) throws -> String? {
-        calls.append(allowInteraction)
-        if requiresInteraction, !allowInteraction {
-            throw ClaudeDesktopCredentialError.permissionRequired
-        }
-        return password
-    }
+    var keyReader: FakeElectronSafeStoragePasswordReader
 }
 
 final class FakeClaudeDesktopSQLite: SQLiteAccessing, @unchecked Sendable {

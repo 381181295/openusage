@@ -1,8 +1,5 @@
-import CommonCrypto
 import CryptoKit
 import Foundation
-import LocalAuthentication
-import Security
 
 enum ClaudeDesktopCredentialStatus: Sendable, Equatable {
     case notChecked
@@ -19,57 +16,6 @@ struct ClaudeDesktopCredentialResult: Sendable {
     var organization: String? = nil
 }
 
-protocol ClaudeDesktopSafeStorageKeyReading: Sendable {
-    func readPassword(allowInteraction: Bool) throws -> String?
-}
-
-struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
-    private static let service = "Claude Safe Storage"
-    private static let account = "Claude Key"
-
-    func readPassword(allowInteraction: Bool) throws -> String? {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: Self.account,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecReturnData as String: true
-        ]
-        if !allowInteraction {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-        }
-
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        switch status {
-        case errSecSuccess:
-            guard let data = result as? Data,
-                  let password = String(data: data, encoding: .utf8),
-                  !password.isEmpty
-            else {
-                throw ClaudeDesktopCredentialError.invalidSafeStorageKey
-            }
-            return password
-        case errSecItemNotFound:
-            return nil
-        case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
-            throw ClaudeDesktopCredentialError.permissionRequired
-        default:
-            throw ClaudeDesktopCredentialError.keychainFailure(Int(status))
-        }
-    }
-}
-
-enum ClaudeDesktopCredentialError: Error, Sendable {
-    case permissionRequired
-    case invalidSafeStorageKey
-    case keychainFailure(Int)
-    case invalidCiphertext
-    case decryptionFailed(Int32)
-}
-
 /// Reads Claude Desktop's Electron OAuth cache as an externally owned, read-only credential source.
 ///
 /// The refresh token is deliberately never decoded into `ClaudeOAuth`: Anthropic rotates refresh
@@ -84,28 +30,29 @@ struct ClaudeDesktopAuthStore: Sendable {
     private static let cacheV1Key = "oauth:tokenCache"
     private static let cacheV2Key = "oauth:tokenCacheV2"
     private static let cookieHosts = [".claude.ai", "claude.ai"]
+    static let safeStorageItem = ElectronSafeStorageKeychainItem(
+        service: "Claude Safe Storage",
+        account: "Claude Key"
+    )
 
     var files: TextFileAccessing
     var sqlite: SQLiteAccessing
-    var keyReader: ClaudeDesktopSafeStorageKeyReading
+    var safeStorage: ElectronSafeStorage
     var homeDirectory: @Sendable () -> URL
     var now: @Sendable () -> Date
-    private let keyCache: SafeStorageKeyCache
 
     init(
         files: TextFileAccessing = LocalTextFileAccessor(),
         sqlite: SQLiteAccessing = SQLiteCLIAccessor(),
-        keyReader: ClaudeDesktopSafeStorageKeyReading = ClaudeDesktopSafeStorageKeyReader(),
+        safeStorage: ElectronSafeStorage = ElectronSafeStorage(item: ClaudeDesktopAuthStore.safeStorageItem),
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
-        now: @escaping @Sendable () -> Date = Date.init,
-        keyCache: SafeStorageKeyCache = SafeStorageKeyCache()
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.files = files
         self.sqlite = sqlite
-        self.keyReader = keyReader
+        self.safeStorage = safeStorage
         self.homeDirectory = homeDirectory
         self.now = now
-        self.keyCache = keyCache
     }
 
     /// Cheap, prompt-free evidence for first-run detection. The real refresh still decrypts and validates.
@@ -181,7 +128,7 @@ struct ClaudeDesktopAuthStore: Sendable {
             case .invalid:
                 return ClaudeDesktopCredentialResult(oauth: nil, status: .invalid)
             }
-        } catch ClaudeDesktopCredentialError.permissionRequired {
+        } catch ElectronSafeStorageError.permissionRequired {
             return ClaudeDesktopCredentialResult(oauth: nil, status: .permissionRequired)
         } catch {
             AppLog.error(LogTag.auth("claude"), "Claude Desktop credential read failed: \(error.localizedDescription)")
@@ -190,13 +137,7 @@ struct ClaudeDesktopAuthStore: Sendable {
     }
 
     private func safeStorageKey(allowInteraction: Bool) throws -> Data? {
-        if let cached = keyCache.value { return cached }
-        guard let password = try keyReader.readPassword(allowInteraction: allowInteraction) else {
-            return nil
-        }
-        let key = try Self.deriveKey(password: password)
-        keyCache.value = key
-        return key
+        try safeStorage.loadKey(allowInteraction: allowInteraction)
     }
 
     private func loadActiveOrganization(key: Data) throws -> String? {
@@ -228,7 +169,7 @@ struct ClaudeDesktopAuthStore: Sendable {
                 if mode == "plain" {
                     value = stored
                 } else if mode == "encrypted" {
-                    let decrypted = try Self.decrypt(stored, key: key)
+                    let decrypted = try ElectronSafeStorage.decryptV10(stored, key: key)
                     let hostHash = Data(SHA256.hash(data: Data(host.utf8)))
                     guard decrypted.starts(with: hostHash) else { continue }
                     value = decrypted.dropFirst(hostHash.count)
@@ -262,104 +203,17 @@ struct ClaudeDesktopAuthStore: Sendable {
     private static func decodeCache(_ stored: Any?, key: Data) throws -> [String: Any]? {
         guard let base64 = stored as? String else { return nil }
         guard let encrypted = Data(base64Encoded: base64) else {
-            throw ClaudeDesktopCredentialError.invalidCiphertext
+            throw ElectronSafeStorageError.invalidCiphertext
         }
-        let plaintext = try decrypt(encrypted, key: key)
+        let plaintext = try ElectronSafeStorage.decryptV10(encrypted, key: key)
         guard let object = try JSONSerialization.jsonObject(with: plaintext) as? [String: Any] else {
-            throw ClaudeDesktopCredentialError.invalidCiphertext
+            throw ElectronSafeStorageError.invalidCiphertext
         }
         return object
     }
 
-    static func deriveKey(password: String) throws -> Data {
-        let passwordData = Data(password.utf8)
-        let salt = Data("saltysalt".utf8)
-        var key = Data(count: kCCKeySizeAES128)
-        let keyCount = key.count
-        let result = key.withUnsafeMutableBytes { keyBytes in
-            passwordData.withUnsafeBytes { passwordBytes in
-                salt.withUnsafeBytes { saltBytes in
-                    CCKeyDerivationPBKDF(
-                        CCPBKDFAlgorithm(kCCPBKDF2),
-                        passwordBytes.bindMemory(to: Int8.self).baseAddress,
-                        passwordData.count,
-                        saltBytes.bindMemory(to: UInt8.self).baseAddress,
-                        salt.count,
-                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA1),
-                        1003,
-                        keyBytes.bindMemory(to: UInt8.self).baseAddress,
-                        keyCount
-                    )
-                }
-            }
-        }
-        guard result == kCCSuccess else {
-            throw ClaudeDesktopCredentialError.invalidSafeStorageKey
-        }
-        return key
-    }
-
-    static func decrypt(_ encrypted: Data, key: Data) throws -> Data {
-        guard encrypted.count > 3,
-              encrypted.prefix(3) == Data("v10".utf8),
-              key.count == kCCKeySizeAES128
-        else {
-            throw ClaudeDesktopCredentialError.invalidCiphertext
-        }
-
-        let payload = encrypted.dropFirst(3)
-        let iv = Data(repeating: 0x20, count: kCCBlockSizeAES128)
-        var output = Data(count: payload.count + kCCBlockSizeAES128)
-        var outputLength = 0
-        let outputCapacity = output.count
-        let status = output.withUnsafeMutableBytes { outputBytes in
-            payload.withUnsafeBytes { payloadBytes in
-                key.withUnsafeBytes { keyBytes in
-                    iv.withUnsafeBytes { ivBytes in
-                        CCCrypt(
-                            CCOperation(kCCDecrypt),
-                            CCAlgorithm(kCCAlgorithmAES),
-                            CCOptions(kCCOptionPKCS7Padding),
-                            keyBytes.baseAddress,
-                            key.count,
-                            ivBytes.baseAddress,
-                            payloadBytes.baseAddress,
-                            payload.count,
-                            outputBytes.baseAddress,
-                            outputCapacity,
-                            &outputLength
-                        )
-                    }
-                }
-            }
-        }
-        guard status == kCCSuccess else {
-            throw ClaudeDesktopCredentialError.decryptionFailed(status)
-        }
-        output.count = outputLength
-        return output
-    }
-
     private func path(_ relativePath: String) -> String {
         homeDirectory().appendingPathComponent(relativePath).path
-    }
-}
-
-final class SafeStorageKeyCache: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stored: Data?
-
-    var value: Data? {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return stored
-        }
-        set {
-            lock.lock()
-            stored = newValue
-            lock.unlock()
-        }
     }
 }
 

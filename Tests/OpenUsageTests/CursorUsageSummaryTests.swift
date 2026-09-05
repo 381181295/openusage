@@ -158,7 +158,7 @@ final class CursorUsageSummaryMapperTests: XCTestCase {
 final class CursorEnterpriseProviderTests: XCTestCase {
     func testRefreshCombinesEnterpriseMetersAndStillAppendsUsageHistory() async throws {
         let now = try XCTUnwrap(OpenUsageISO8601.date(from: "2026-07-13T12:00:00.000Z"))
-        let accessToken = makeCursorJWT(sub: "google-oauth2|enterprise-user")
+        let accessToken = makeUnsignedCursorJWT(sub: "google-oauth2|enterprise-user")
         let csv = """
         Date,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Cost
         2026-07-13T10:00:00Z,composer-1,No,0,1000,0,100,Included
@@ -305,5 +305,3 @@ final class CursorEnterpriseProviderTests: XCTestCase {
         ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots", ttl: 600, now: { Date() })
     }
 }
-
-// makeCursorJWT and KeyValueSQLite live in TestSupport.swift.

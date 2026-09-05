@@ -297,7 +297,7 @@ final class CursorSpendProviderTests: XCTestCase {
         \(yesterdayStr),composer-1,No,0,200000,0,0,Included
         """
 
-        let accessToken = makeCursorJWT(sub: "google-oauth2|user_abc123")
+        let accessToken = makeUnsignedCursorJWT(sub: "google-oauth2|user_abc123")
         let http = RoutingHTTPClient { request in
             let url = request.url.absoluteString
             if url.contains("export-usage-events-csv") {
@@ -426,7 +426,7 @@ final class CursorUsageClientRequestTests: XCTestCase {
     // `strategy=tokens`, the session cookie, and `Accept: text/csv` — so a silent regression in
     // URL/header construction cannot slip through.
     func testFetchUsageCSVBuildsTokenStrategyRequestWithSessionCookie() async throws {
-        let accessToken = makeCursorJWT(sub: "google-oauth2|user_abc123")
+        let accessToken = makeUnsignedCursorJWT(sub: "google-oauth2|user_abc123")
         let http = RoutingHTTPClient { _ in
             HTTPResponse(statusCode: 200, headers: [:], body: Data("Date,Model\n".utf8))
         }
@@ -450,5 +450,3 @@ final class CursorUsageClientRequestTests: XCTestCase {
         XCTAssertEqual(request.headers["Accept"], "text/csv")
     }
 }
-
-// makeCursorJWT, KeyValueSQLite, and RoutingHTTPClient live in TestSupport.swift.

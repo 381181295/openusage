@@ -3,8 +3,8 @@ import XCTest
 
 final class CursorAuthStoreTests: XCTestCase {
     func testPrefersKeychainWhenSQLiteLooksFreeAndSubjectsDiffer() {
-        let sqliteToken = makeCursorJWT(sub: "google-oauth2|sqlite-user")
-        let keychainToken = makeCursorJWT(sub: "auth0|keychain-user")
+        let sqliteToken = makeUnsignedCursorJWT(sub: "google-oauth2|sqlite-user")
+        let keychainToken = makeUnsignedCursorJWT(sub: "auth0|keychain-user")
         let sqlite = KeyValueSQLite(values: [
             CursorAuthStore.accessTokenKey: sqliteToken,
             CursorAuthStore.refreshTokenKey: "sqlite-refresh",
@@ -16,11 +16,31 @@ final class CursorAuthStoreTests: XCTestCase {
         ])
         let store = CursorAuthStore(sqlite: sqlite, keychain: keychain)
 
-        let state = store.loadAuthState()
+        guard case .available(.owned(let state)) = store.loadAuthState(allowInteraction: false) else {
+            return XCTFail("Expected an owned Cursor credential")
+        }
 
-        XCTAssertEqual(state?.source, .keychain)
-        XCTAssertEqual(state?.accessToken, keychainToken)
-        XCTAssertEqual(state?.refreshToken, "keychain-refresh")
+        XCTAssertEqual(state.source, .keychain)
+        XCTAssertEqual(state.accessToken, keychainToken)
+        XCTAssertEqual(state.refreshToken, "keychain-refresh")
+    }
+
+    func testLegacyCredentialsTakePrecedenceOverGrokBot() throws {
+        let legacyToken = makeUnsignedCursorJWT(sub: "google-oauth2|legacy-user")
+        let fixture = try makeGrokBotCursorFixture(accessToken: "borrowed-token")
+        let store = CursorAuthStore(
+            sqlite: KeyValueSQLite(values: [CursorAuthStore.accessTokenKey: legacyToken]),
+            keychain: FakeKeychain(),
+            grokBot: fixture.store
+        )
+
+        guard case .available(.owned(let state)) = store.loadAuthState(allowInteraction: false) else {
+            return XCTFail("Expected the legacy Cursor credential")
+        }
+
+        XCTAssertEqual(state.accessToken, legacyToken)
+        XCTAssertEqual(state.source, .sqlite)
+        XCTAssertTrue(fixture.keyReader.calls.isEmpty)
     }
 
     func testPersistsSQLiteAccessToken() throws {
@@ -256,7 +276,7 @@ final class CursorProviderTests: XCTestCase {
     }
 
     func testRefreshFetchesLiveCursorUsage() async {
-        let accessToken = makeCursorJWT(sub: "google-oauth2|user_abc123")
+        let accessToken = makeUnsignedCursorJWT(sub: "google-oauth2|user_abc123")
         let http = RoutingHTTPClient { request in
             let url = request.url.absoluteString
             if url.contains("GetCurrentPeriodUsage") {
@@ -326,6 +346,112 @@ final class CursorProviderTests: XCTestCase {
         XCTAssertEqual(progress(snapshot.lines, "Other Models")?.used, 7.5)
         XCTAssertEqual(progress(snapshot.lines, "On-demand")?.used, 40)
     }
+
+    func testBorrowedTokenWithoutExpiryIsUsedWithoutRefreshOrWrites() async throws {
+        let accessToken = makeUnsignedCursorJWT(sub: "google-oauth2|borrowed-user", exp: nil)
+        let fixture = try makeGrokBotCursorFixture(accessToken: accessToken)
+        let sqlite = KeyValueSQLite()
+        let keychain = ServiceKeychain()
+        let originalFiles = fixture.files.files
+        let http = RoutingHTTPClient { request in
+            switch request.url {
+            case CursorUsageClient.usageURL:
+                XCTAssertEqual(request.headers["Authorization"], "Bearer \(accessToken)")
+                return HTTPResponse(statusCode: 200, headers: [:], body: Data("""
+                {
+                  "enabled": true,
+                  "billingCycleEnd": 1772592000000,
+                  "planUsage": {
+                    "limit": 40000,
+                    "remaining": 32000,
+                    "totalPercentUsed": 20
+                  }
+                }
+                """.utf8))
+            case CursorUsageClient.planURL:
+                return HTTPResponse(
+                    statusCode: 200,
+                    headers: [:],
+                    body: Data(#"{"planInfo":{"planName":"Pro"}}"#.utf8)
+                )
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(
+                sqlite: sqlite,
+                keychain: keychain,
+                grokBot: fixture.store
+            ),
+            usageClient: CursorUsageClient(http: http),
+            now: { Date(timeIntervalSince1970: 1_800_000_000) },
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertNil(snapshot.errorCategory)
+        XCTAssertEqual(progress(snapshot.lines, "Total usage")?.used, 20)
+        XCTAssertFalse(http.requests.contains { $0.url == CursorUsageClient.refreshURL })
+        XCTAssertTrue(sqlite.writtenValues.isEmpty)
+        XCTAssertTrue(keychain.values.isEmpty)
+        XCTAssertEqual(fixture.files.files, originalFiles)
+    }
+
+    func testRejectedBorrowedTokenReportsGrokBotRecoveryWithoutRefresh() async throws {
+        let accessToken = makeUnsignedCursorJWT(sub: "google-oauth2|borrowed-user", exp: nil)
+        let fixture = try makeGrokBotCursorFixture(accessToken: accessToken)
+        let http = RoutingHTTPClient { request in
+            XCTAssertEqual(request.url, CursorUsageClient.usageURL)
+            return HTTPResponse(statusCode: 401, headers: [:], body: Data())
+        }
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(
+                sqlite: KeyValueSQLite(),
+                keychain: FakeKeychain(),
+                grokBot: fixture.store
+            ),
+            usageClient: CursorUsageClient(http: http)
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(snapshot.errorCategory, .authExpired)
+        XCTAssertEqual(
+            badgeText(snapshot.lines),
+            CursorAuthError.grokBotAuthenticationRequired.errorDescription
+        )
+        XCTAssertEqual(http.requests.count, 1)
+        XCTAssertFalse(http.requests.contains { $0.url == CursorUsageClient.refreshURL })
+    }
+
+    func testNextRefreshRereadsRejectedGrokBotCredential() async throws {
+        let first = try makeGrokBotCursorFixture(accessToken: "first-borrowed-token")
+        let second = try makeGrokBotCursorFixture(accessToken: "second-borrowed-token")
+        let http = RoutingHTTPClient { _ in
+            HTTPResponse(statusCode: 401, headers: [:], body: Data())
+        }
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(
+                sqlite: KeyValueSQLite(),
+                keychain: FakeKeychain(),
+                grokBot: first.store
+            ),
+            usageClient: CursorUsageClient(http: http)
+        )
+
+        _ = await provider.refresh()
+        first.files.files[GrokBotCursorAuthStore.secretsPath] =
+            second.files.files[GrokBotCursorAuthStore.secretsPath]
+        _ = await provider.refresh()
+
+        XCTAssertEqual(
+            http.requests.compactMap { $0.headers["Authorization"] },
+            ["Bearer first-borrowed-token", "Bearer second-borrowed-token"]
+        )
+        XCTAssertFalse(http.requests.contains { $0.url == CursorUsageClient.refreshURL })
+    }
 }
 
 private func progress(_ lines: [MetricLine], _ label: String) -> (used: Double, limit: Double, resetsAt: Date?, periodDurationMs: Int?)? {
@@ -342,4 +468,7 @@ private func dollarValue(_ lines: [MetricLine], _ label: String) -> Double? {
     return values.first { $0.kind == .dollars }?.number
 }
 
-// makeCursorJWT, KeyValueSQLite, and RoutingHTTPClient live in TestSupport.swift.
+private func badgeText(_ lines: [MetricLine]) -> String? {
+    guard case .badge(_, let text, _, _) = lines.first else { return nil }
+    return text
+}

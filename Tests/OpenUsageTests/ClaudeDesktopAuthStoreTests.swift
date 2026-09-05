@@ -1,5 +1,3 @@
-import CommonCrypto
-import CryptoKit
 import Foundation
 import XCTest
 @testable import OpenUsage
@@ -13,15 +11,6 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
     let otherClientID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
     let password = "fixture-safe-storage-password"
     let now = Date(timeIntervalSince1970: 1_800_000_000)
-
-    func testDecryptsElectronSafeStorageValue() throws {
-        let key = try ClaudeDesktopAuthStore.deriveKey(password: password)
-        let plaintext = Data(#"{"token":"secret"}"#.utf8)
-        let encrypted = try encrypt(plaintext, key: key)
-
-        XCTAssertEqual(try ClaudeDesktopAuthStore.decrypt(encrypted, key: key), plaintext)
-        XCTAssertThrowsError(try ClaudeDesktopAuthStore.decrypt(Data("v11bad".utf8), key: key))
-    }
 
     func testSelectsActiveOrganizationFromV2Cache() throws {
         let fixture = try makeFixture(
@@ -108,7 +97,10 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         let loggedOut = ClaudeDesktopAuthStore(
             files: fixture.files,
             sqlite: FakeClaudeDesktopSQLite(value: nil),
-            keyReader: fixture.keyReader,
+            safeStorage: ElectronSafeStorage(
+                item: ClaudeDesktopAuthStore.safeStorageItem,
+                passwordReader: fixture.keyReader
+            ),
             homeDirectory: { fixtureHome }
         )
 
